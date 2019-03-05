@@ -1,0 +1,85 @@
+for anaconda install:
+   conda config --add
+   conda create -n vision python==3.6.*
+   conda activate vision
+   conda install numpy matplotlib
+
+delete the following files:
+   <...>/anaconda3/lib/libfontconfig.so
+   <...>/anaconda3/lib/libfontconfig.so.1
+   <...>/anaconda3/lib/libfontconfig.so.1.12
+
+
+
+For repositories:
+   libjasper:
+      sudo add-apt-repository "deb http://security.ubuntu.com/ubuntu xenial-security main"
+
+Step 1: Updating Ubuntu
+   sudo apt-get update
+   sudo apt-get upgrade
+
+step 2: Installing Dependencies
+   sudo apt-get install build-essential
+
+   sudo apt-get install cmake git libgtk2.0-dev pkg-config libavcodec-dev libavformat-dev libswscale-dev
+
+step 2.1: Imaging Processing Dependencies
+   sudo apt-get install python3.6-dev python3-dev libtbb2 libtbb-dev libjpeg-dev libpng-dev libtiff-dev libjasper-dev libdc1394-22-dev
+
+step 2.2: Video Processing Dependencies
+   sudo apt-get install libavcodec-dev libavformat-dev libswscale-dev libv4l-dev
+
+   sudo apt-get install libxvidcore-dev libx264-dev
+
+step 2.3: Lets add a GUI:
+   sudo apt-get install libgtk-3-dev
+
+step 2.4: Get things ready to optimize it:
+   sudo apt-get install libatlas-base-dev gfortran pylint
+
+step 3.1: Donwload OpenCV
+   wget -O opencv.zip https://github.com/opencv/opencv/archive/3.4.5.zip
+
+   wget -O opencv_contrib.zip https://github.com/opencv/opencv_contrib/archive/3.4.5.zip
+
+   (assuming you are in the home directory)
+   cd ~
+   unzip opencv.zip
+   unzip opencv_contrib.zip
+
+step 3.2: Create Build Directory
+   cd ~/opencv-3.4.5/
+   mkdir build
+   cd build
+
+
+
+step 3.3: Configure OpenCV
+   cmake -D CMAKE_INSTALL_PREFIX=/usr/local -D WITH_CUDA=OFF -D WITH_QT=OFF -D WITH_OPENGL=ON -D OPENCV_EXTRA_MODULES_PATH=/home/jorne/opencv_contrib-3.4.5/modules/ -D ENABLE_FAST_MATH=ON -D CUDA_FAST_MATH=ON -D CUDA_NVCC_FLAGS="-D_FORCE_INLINES" -D WITH_CUBLAS=ON -D BUILD_OPENCV_PYTHON3=ON -D PYTHON3_EXECUTABLE=/home/jorne/miniconda3/envs/vision/bin/python -D PYTHON3_INCLUDE_PATH=/home/jorne/miniconda3/envs/vision/include/python3.6m -D PYTHON3_LIBRARIES=/home/jorne/miniconda3/envs/vision/lib/python3.6/site-packages -D OPENCV_ENABLE_NONFREE=ON -D WITH_TBB=ON -D WITH_V4L=ON -D INSTALL_C_EXAMPLES=OFF -D BUILD_SHARED_LIBS=ON ..
+
+step 3.4: Compile and install OpenCV
+   make -j4 (4 points to the amount of threads you want to invest in compiling, don't use all! if in doubt use 2)
+
+   sudo make install
+   sudo ldconfig
+
+step 4.1: finding python3 binding:
+   ls /usr/local/lib/python3.6/site-packages/cv2/python-3.6/
+   (here you should find cv2.cpython-36m-x86_64-linux-gnu.so)
+
+   if so:
+step 4.2: renaming the binding:
+   cd /usr/local/lib/python3.6/site-packages/cv2/python-3.6/
+   ls
+   sudo mv cv2.cpython-36m-x86_64-linux-gnu.so cv2.so
+
+step4.3: sym-link them into anaconda:
+   cd miniconda3/envs/vision/lib/python3.6/site-packages/
+
+   ln -s /usr/local/lib/python3.6/site-packages/cv2/python-3.6/cv2.so cv2.so
+
+   python
+
+   import cv2
+   cv2.__version__
