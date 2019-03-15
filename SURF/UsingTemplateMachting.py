@@ -2,34 +2,38 @@ import cv2
 import numpy as np
 from matplotlib import pyplot as plt
 import glob
-import imutils
 from scipy.ndimage import rotate
 from skimage.measure import compare_ssim
-import matplotlib.patches as patches
+from collections import deque
 
-DIST_TRESHOLD = 0.1             # euclidean distance threshold for the SURF descriptor match filter
-N_SKIP = 3                     # gap in images between image matching reset
-TEMP_SIZE_FACTOR = 1.6         # ratio factor (template area / feature_size) for template matching 
-OBJECT_SCALE_DETECTION_TH = 1.1 # scale detection treshold
-TEMP_MATCH_NUM_OF_SCALE_IT = 10 # number of iterations in the scaling template matching procedure 
+DIST_TRESHOLD = 0.1                     # euclidean distance threshold for the SURF descriptor match filter
+N_SKIP = 1                              # gap in images between image matching reset
+TEMP_SIZE_FACTOR = 2.0                  # ratio factor (template area / feature_size) for template matching 
+OBJECT_SCALE_DETECTION_TH = 1.2         # scale increase detection treshold
+TEMP_MATCH_NUM_OF_SCALE_IT = 10          # number of iterations in the scaling template matching procedure 
+SURF_HESSIAN_TRESHOLD = 5000            # threshold of hessian for the SURF detection -> depends on image quality
+IS_SURF_UPRIGHT = True                  # Use U-surf to disregard rotation invariance for performance boost
+TEMPLATE_IP_METHOD = cv2.INTER_CUBIC    # template resizing method
 
-images = [cv2.imread(file) for file in sorted(glob.glob('*.jpg'))]
+images = [cv2.imread(file) for file in sorted(glob.glob('huistest/*.jpg'))]
+
+prevImgQueue = deque([])
+prevFeaturesQueue = deque([])
 
 for idx,newImg in enumerate(images):
 
-    newImg = rotate(newImg,90)
+    e1 = cv2.getTickCount()
+    """ newImg = rotate(newImg,90) """
 
     #obtain Surf features
     grayNewImg = cv2.cvtColor(newImg, cv2.COLOR_BGR2GRAY)    
-    surf = cv2.xfeatures2d.SURF_create()
-    '''surf.setUpright(True)   #Use U-surf to disregard rotation invariance for performance boost '''  
+    surf = cv2.xfeatures2d.SURF_create(hessianThreshold = SURF_HESSIAN_TRESHOLD, upright = IS_SURF_UPRIGHT)       
     (newKps,newDescs) = surf.detectAndCompute(newImg,None)  
 
     (imgHeight,imgWidth) = grayNewImg.shape[:2]
     objectKeypoints = [] #we will store objects in here
-
     
-    if idx > 0: #skip only the first image since we cannot match it with anything yet
+    if idx > N_SKIP-1: #skip only the first N_SKIP images since we cannot match them with anything yet
 
         #Match with previous newImg
         bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck = True)  #FLANN more efficient?
@@ -59,7 +63,7 @@ for idx,newImg in enumerate(images):
         prevSizes = [kpt.size for kpt in finalPrevKps]
         prevPointsXY = [kpt.pt for kpt in finalPrevKps]
         newPointsXY = [kpt.pt for kpt in finalNewKps]   
-
+        
         for idx, prevXYPoint in enumerate(prevPointsXY):
 
             templateLength = round(prevSizes[idx]*TEMP_SIZE_FACTOR)
@@ -81,7 +85,7 @@ for idx,newImg in enumerate(images):
                 for scale in np.linspace(1.0,1.5,TEMP_MATCH_NUM_OF_SCALE_IT):
                     
                     #Expand prevTemplate at scale 
-                    resizedPrevTemp = cv2.resize(prevTemplate, (0,0), fx= scale, fy= scale, interpolation = cv2.INTER_CUBIC)
+                    resizedPrevTemp = cv2.resize(prevTemplate, (0,0), fx= scale, fy= scale, interpolation = TEMPLATE_IP_METHOD)
 
                     """ plt.subplot(1,2,1)
                     plt.gca().set_title('(img = n-1)')
@@ -111,26 +115,23 @@ for idx,newImg in enumerate(images):
                         
                         # now match the templates and compute a matching metric using Structural similarity index
                         (score, _) = compare_ssim(resizedPrevTemp, newTemplate, full=True) #score is number between -1 and 1 [worse to best]
-                        #WARNING top line might have to be changed to include scale factor^2
                         
+                        # match using means squared error approach                        
                         if score > maxScore:
-
                             maxScore = score
                             bestMatchingScale = scale
 
-                        if scale == 1: # as a reference, store the matchingfactor at scale 1 which we will use later
-                            
+                        if scale == 1: # as a reference, store the matchingfactor at scale 1 which we will use later                            
                             (scoreAtScaleOne, _) = compare_ssim(resizedPrevTemp, newTemplate, full=True)                     
 
                              
                 # Mark the keypoints in the new image frame as objects if the following condition holds
-                if (bestMatchingScale > OBJECT_SCALE_DETECTION_TH and maxScore > scoreAtScaleOne):
-
+                if (bestMatchingScale > OBJECT_SCALE_DETECTION_TH and maxScore > 1.2*scoreAtScaleOne):
                     objectKeypoints.append(finalNewKps[idx])                 
 
         # Draw normal keypoints
         plotImg = np.empty((newImg.shape[0], newImg.shape[1], 3), dtype=np.uint8)
-        cv2.drawKeypoints(newImg, finalNewKps,plotImg,(255,0,0))
+        """ cv2.drawKeypoints(newImg, finalNewKps,plotImg,(255,0,0),4) """
 
         if len(objectKeypoints) > 0:
 
@@ -138,19 +139,36 @@ for idx,newImg in enumerate(images):
             ObjectsXY = [objectKeypoint.pt for objectKeypoint in objectKeypoints]            
             X = [int(objectXY[0]) for objectXY in ObjectsXY]  
             Y = [int(objectXY[1]) for objectXY in ObjectsXY]
-            font = cv2.FONT_HERSHEY_SIMPLEX            
+            """ font = cv2.FONT_HERSHEY_SIMPLEX            
             for objects in list(zip(X,Y)):            
                 cv2.putText(plotImg,"CAUTION OBJECT",objects,font,0.3,(0,0,255),1)
-                cv2.circle(plotImg,objects,4,(0,0,255),-1)                            
+                cv2.circle(plotImg,objects,4,(0,0,255),-1)  """                           
             
-        #Show figure
+        """ #Show figure
         plt.imshow(plotImg)
-        plt.pause(.5)
+        plt.pause(.001)
         plt.draw()
-        plt.clf()
+        plt.clf() """
+      
+        
+    """ prevImgQueue.append(grayNewImg)
+    prevFeaturesQueue.append()
+
+   
+
+    if len(prevImgQueue) > N_SKIP:
+        prevImgQueue.popleft() """
+
+
+
 
     if idx % N_SKIP == 0:
         prevImg = grayNewImg
         (prevKps,prevDescs) = (newKps,newDescs)
+
+    e2 = cv2.getTickCount()
+    time =(e2-e1)/cv2.getTickFrequency()
+    print(time)
+
 
 
