@@ -3,46 +3,50 @@ import numpy as np
 from matplotlib import pyplot as plt
 import glob
 from scipy.ndimage import rotate
-from skimage.measure import compare_ssim
 from collections import deque
 
 DIST_TRESHOLD = 0.1                     # euclidean distance threshold for the SURF descriptor match filter
 N_SKIP = 1                              # gap in images between image matching reset
 TEMP_SIZE_FACTOR = 2.0                  # ratio factor (template area / feature_size) for template matching 
-OBJECT_SCALE_DETECTION_TH = 1.2         # scale increase detection treshold
-TEMP_MATCH_NUM_OF_SCALE_IT = 10          # number of iterations in the scaling template matching procedure 
+OBJECT_SCALE_DETECTION_TH = 1.1         # scale increase detection treshold
+TEMP_MATCH_NUM_OF_SCALE_IT = 10         # number of iterations in the scaling template matching procedure 
 SURF_HESSIAN_TRESHOLD = 5000            # threshold of hessian for the SURF detection -> depends on image quality
 IS_SURF_UPRIGHT = True                  # Use U-surf to disregard rotation invariance for performance boost
 TEMPLATE_IP_METHOD = cv2.INTER_CUBIC    # template resizing method
 
-images = [cv2.imread(file) for file in sorted(glob.glob('huistest/*.jpg'))]
+prevImgQueue = deque([],N_SKIP)
+prevDescsQueue = deque([],N_SKIP)
+prevKpsQueue = deque([],N_SKIP)
 
-prevImgQueue = deque([])
-prevFeaturesQueue = deque([])
+images = [cv2.imread(file) for file in sorted(glob.glob('huistest/*.jpg'))]
 
 for idx,newImg in enumerate(images):
 
-    e1 = cv2.getTickCount()
-    """ newImg = rotate(newImg,90) """
+    """ newImg = rotate(newImg,90) """ #optional, depends on footage
+    grayNewImg = cv2.cvtColor(newImg, cv2.COLOR_BGR2GRAY)
+    (imgHeight,imgWidth) = grayNewImg.shape[:2] 
 
-    #obtain Surf features
-    grayNewImg = cv2.cvtColor(newImg, cv2.COLOR_BGR2GRAY)    
+    #obtain Surf features       
     surf = cv2.xfeatures2d.SURF_create(hessianThreshold = SURF_HESSIAN_TRESHOLD, upright = IS_SURF_UPRIGHT)       
     (newKps,newDescs) = surf.detectAndCompute(newImg,None)  
-
-    (imgHeight,imgWidth) = grayNewImg.shape[:2]
-    objectKeypoints = [] #we will store objects in here
     
-    if idx > N_SKIP-1: #skip only the first N_SKIP images since we cannot match them with anything yet
+    #we will store objects in here
+    objectKeypoints = []
+    
+    if idx > N_SKIP-1: #wait untill queue contains N_SKIP images so we can match with the oldest one
+
+        #Unpack attributes of the oldest image in the queue to match with
+        prevImg = prevImgQueue.popleft()
+        prevDescs = prevDescsQueue.popleft()
+        prevKps = prevKpsQueue.popleft()
 
         #Match with previous newImg
         bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck = True)  #FLANN more efficient?
         matches = bf.match(prevDescs,newDescs) #  matches = bf.radiusMatch(prevDescs,newDescs, DIST_TRESHOLD) more efficient?
 
         #Filter out "worse" matches
-        matches = [match for match in matches if match.distance < DIST_TRESHOLD]            
+        matches = [match for match in matches if match.distance < DIST_TRESHOLD]      
         
-
         #Filter out matches whose size has decreased or stayed the same
         finalizedMatches = []
         for idx in range(len(matches)): 
@@ -64,7 +68,7 @@ for idx,newImg in enumerate(images):
         prevPointsXY = [kpt.pt for kpt in finalPrevKps]
         newPointsXY = [kpt.pt for kpt in finalNewKps]   
         
-        for idx, prevXYPoint in enumerate(prevPointsXY):
+        for idx, prevXYPoint in enumerate(prevPointsXY):    
 
             templateLength = round(prevSizes[idx]*TEMP_SIZE_FACTOR)
 
@@ -79,7 +83,8 @@ for idx,newImg in enumerate(images):
                 patchSize = (templateLength, templateLength)                
                 prevTemplate = cv2.getRectSubPix(prevImg,patchSize,prevXYPoint)     
                                     
-                maxScore = -1.1 #minimum SSI score is -1
+                lowestError = float('inf')
+                errAtScaleOne = float('inf')
 
                 #Loop through template matching procedure by scaling
                 for scale in np.linspace(1.0,1.5,TEMP_MATCH_NUM_OF_SCALE_IT):
@@ -88,19 +93,19 @@ for idx,newImg in enumerate(images):
                     resizedPrevTemp = cv2.resize(prevTemplate, (0,0), fx= scale, fy= scale, interpolation = TEMPLATE_IP_METHOD)
 
                     """ plt.subplot(1,2,1)
-                    plt.gca().set_title('(img = n-1)')
+                    plt.gca().set_title('img = n -%i'%(N_SKIP))
                     plt.imshow(resizedPrevTemp,cmap="gray")                    
-                    plt.draw() """  
+                    plt.draw()  """ 
 
                     # Second, create a template in the image under analysis using the matched keypoint,
                     # first we have check if desired template around the matching keypoint for current image exceeds the image size
                     matchPointXY = newPointsXY[idx]
 
-                    # See if the desired New template does not exceed the image size
+                    # See if the desired New template does not exceed the image size and exit matching procedure if it does 
                     if (int(matchPointXY[0]+templateLength*scale/2) > imgWidth or int(matchPointXY[0]-templateLength*scale/2) < 0
                         or int(matchPointXY[1]+templateLength*scale/2) > imgHeight or int(matchPointXY[1]-templateLength*scale/2 < 0) ):
                         
-                        break  #exit matching procedure                   
+                        break                 
                     
                     else:                  
 
@@ -109,29 +114,29 @@ for idx,newImg in enumerate(images):
 
                         """ plt.subplot(1,2,2)
                         plt.imshow(newTemplate,cmap="gray")
-                        plt.gca().set_title('(img = n)')
+                        plt.gca().set_title('img = n')
                         plt.draw()
-                        plt.pause(0.01) """ 
+                        plt.pause(0.01)  """
                         
-                        # now match the templates and compute a matching metric using Structural similarity index
-                        (score, _) = compare_ssim(resizedPrevTemp, newTemplate, full=True) #score is number between -1 and 1 [worse to best]
-                        
-                        # match using means squared error approach                        
-                        if score > maxScore:
-                            maxScore = score
+                        #Compare them using MEAN SQUARED ERROR
+                        err = np.sum((resizedPrevTemp.astype("float") - newTemplate.astype("float")) ** 2)
+                        err /= float(resizedPrevTemp.shape[0] * newTemplate.shape[1])                        
+                                                
+                        # update best match                       
+                        if err < lowestError:
+                            lowestError = err
                             bestMatchingScale = scale
 
                         if scale == 1: # as a reference, store the matchingfactor at scale 1 which we will use later                            
-                            (scoreAtScaleOne, _) = compare_ssim(resizedPrevTemp, newTemplate, full=True)                     
-
+                            errAtScaleOne = err                  
                              
                 # Mark the keypoints in the new image frame as objects if the following condition holds
-                if (bestMatchingScale > OBJECT_SCALE_DETECTION_TH and maxScore > 1.2*scoreAtScaleOne):
+                if (bestMatchingScale >= OBJECT_SCALE_DETECTION_TH and lowestError <= 0.8*errAtScaleOne):
                     objectKeypoints.append(finalNewKps[idx])                 
 
-        # Draw normal keypoints
+        # Draw filtered keypoints (no objects yet)
         plotImg = np.empty((newImg.shape[0], newImg.shape[1], 3), dtype=np.uint8)
-        """ cv2.drawKeypoints(newImg, finalNewKps,plotImg,(255,0,0),4) """
+        cv2.drawKeypoints(newImg, finalNewKps,plotImg,(255,0,0),4)
 
         if len(objectKeypoints) > 0:
 
@@ -139,36 +144,25 @@ for idx,newImg in enumerate(images):
             ObjectsXY = [objectKeypoint.pt for objectKeypoint in objectKeypoints]            
             X = [int(objectXY[0]) for objectXY in ObjectsXY]  
             Y = [int(objectXY[1]) for objectXY in ObjectsXY]
-            """ font = cv2.FONT_HERSHEY_SIMPLEX            
+            font = cv2.FONT_HERSHEY_SIMPLEX            
             for objects in list(zip(X,Y)):            
-                cv2.putText(plotImg,"CAUTION OBJECT",objects,font,0.3,(0,0,255),1)
-                cv2.circle(plotImg,objects,4,(0,0,255),-1)  """                           
+                cv2.putText(plotImg,"CAUTION OBJECT",objects,font,1,(0,0,255),2)
+                cv2.circle(plotImg,objects,8,(0,0,255),-1)                            
             
-        """ #Show figure
+        #Show figure
         plt.imshow(plotImg)
         plt.pause(.001)
         plt.draw()
-        plt.clf() """
+        plt.clf()
       
-        
-    """ prevImgQueue.append(grayNewImg)
-    prevFeaturesQueue.append()
+    #Add the image, descriptors and keypoints to the queue holding N_SKIP items
+    prevImgQueue.append(grayNewImg)
+    prevDescsQueue.append(newDescs)
+    prevKpsQueue.append(newKps)   
 
    
 
-    if len(prevImgQueue) > N_SKIP:
-        prevImgQueue.popleft() """
-
-
-
-
-    if idx % N_SKIP == 0:
-        prevImg = grayNewImg
-        (prevKps,prevDescs) = (newKps,newDescs)
-
-    e2 = cv2.getTickCount()
-    time =(e2-e1)/cv2.getTickFrequency()
-    print(time)
-
-
+    
+    
+    
 
